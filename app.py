@@ -1,24 +1,21 @@
 from dotenv import load_dotenv
 load_dotenv()
-
 from flask import Flask, render_template, request, redirect, url_for, flash, jsonify
 from supabase import create_client, Client
 import os
 from werkzeug.utils import secure_filename
 import uuid
 from datetime import datetime
+import time
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from optimized_upload import optimize_upload_performance
 
 app = Flask(__name__)
-
 # Load environment variables
 SUPABASE_URL = os.getenv('SUPABASE_URL')
 SUPABASE_KEY = os.getenv('SUPABASE_KEY')
 FLASK_SECRET_KEY = os.getenv('FLASK_SECRET_KEY')
-
-# Debug: Print the loaded values (remove this after testing)
-print(f"SUPABASE_URL: {SUPABASE_URL}")
-print(f"SUPABASE_KEY: {SUPABASE_KEY[:20]}..." if SUPABASE_KEY else "SUPABASE_KEY: None")
-print(f"FLASK_SECRET_KEY: {FLASK_SECRET_KEY}")
 
 # Validate environment variables
 if not SUPABASE_URL or not SUPABASE_KEY:
@@ -29,15 +26,14 @@ app.secret_key = FLASK_SECRET_KEY or 'fallback-secret-key'
 # Initialize Supabase client
 try:
     supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
-    print("Supabase client initialized successfully!")
 except Exception as e:
-    print(f"Error initializing Supabase client: {e}")
     raise
 
 # File upload configuration
 UPLOAD_FOLDER = 'temp_uploads'
 ALLOWED_EXTENSIONS = {'pdf', 'doc', 'docx'}
 MAX_FILE_SIZE = 5 * 1024 * 1024  # 5MB
+CHUNK_SIZE = 1024 * 1024  # 1MB chunks for faster uploads
 
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = MAX_FILE_SIZE
@@ -45,9 +41,34 @@ app.config['MAX_CONTENT_LENGTH'] = MAX_FILE_SIZE
 # Create upload folder if it doesn't exist
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
+# Thread pool for async operations
+executor = ThreadPoolExecutor(max_workers=3)
+
 def allowed_file(filename):
     return '.' in filename and \
            filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+def upload_to_supabase_storage_optimized(file_data, storage_path, file_extension):
+    """Advanced optimized upload with compression and retry logic"""
+    try:
+        # Use the advanced optimization module
+        result = optimize_upload_performance(supabase, file_data, storage_path, file_extension)
+        return result['result'] if result['success'] else None
+    except Exception as e:
+        # Fallback to basic upload
+        return supabase.storage.from_('resumes').upload(
+            storage_path, 
+            file_data,
+            file_options={"content-type": f"application/{file_extension}"}
+        )
+
+def save_to_database(user_data):
+    """Save user data to database with optimized connection"""
+    return supabase.table('user_resumes').insert(user_data).execute()
+
+def get_public_url(storage_path):
+    """Get public URL for uploaded file"""
+    return supabase.storage.from_('resumes').get_public_url(storage_path)
 
 @app.route('/')
 def index():
@@ -80,28 +101,18 @@ def upload_resume():
             # Generate unique filename
             file_extension = file.filename.rsplit('.', 1)[1].lower()
             unique_filename = f"{uuid.uuid4()}.{file_extension}"
+            storage_path = f"resumes/{unique_filename}"
             
-            # Save file temporarily
-            temp_filepath = os.path.join(app.config['UPLOAD_FOLDER'], unique_filename)
-            file.save(temp_filepath)
+            # Read file directly into memory (optimized)
+            file_data = file.read()
             
             try:
-                # Upload file to Supabase Storage
-                with open(temp_filepath, 'rb') as f:
-                    file_data = f.read()
-                
-                storage_path = f"resumes/{unique_filename}"
-                
-                # Upload to Supabase Storage
-                storage_response = supabase.storage.from_('resumes').upload(
-                    storage_path, 
-                    file_data,
-                    file_options={"content-type": f"application/{file_extension}"}
-                )
+                # Upload file to Supabase Storage (optimized)
+                storage_response = upload_to_supabase_storage_optimized(file_data, storage_path, file_extension)
                 
                 if storage_response:
                     # Get public URL for the uploaded file
-                    public_url = supabase.storage.from_('resumes').get_public_url(storage_path)
+                    public_url = get_public_url(storage_path)
                     
                     # Insert user data into database
                     user_data = {
@@ -113,7 +124,7 @@ def upload_resume():
                         'created_at': datetime.now().isoformat()
                     }
                     
-                    db_response = supabase.table('user_resumes').insert(user_data).execute()
+                    db_response = save_to_database(user_data)
                     
                     if db_response.data:
                         flash('Resume uploaded successfully!', 'success')
@@ -124,11 +135,6 @@ def upload_resume():
                 
             except Exception as e:
                 flash(f'Error processing upload: {str(e)}', 'error')
-            
-            finally:
-                # Clean up temporary file
-                if os.path.exists(temp_filepath):
-                    os.remove(temp_filepath)
         
         else:
             flash('Invalid file type! Please upload PDF, DOC, or DOCX files only.', 'error')
