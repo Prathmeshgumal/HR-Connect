@@ -1,6 +1,7 @@
 from dotenv import load_dotenv
 load_dotenv()
-from flask import Flask, render_template, request, redirect, url_for, flash, jsonify
+from flask import Flask, request, jsonify
+from flask_cors import CORS
 from supabase import create_client, Client
 import os
 from werkzeug.utils import secure_filename
@@ -12,6 +13,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from optimized_upload import optimize_upload_performance
 
 app = Flask(__name__)
+CORS(app)  # Enable CORS for React frontend
+
 # Load environment variables
 SUPABASE_URL = os.getenv('SUPABASE_URL')
 SUPABASE_KEY = os.getenv('SUPABASE_KEY')
@@ -70,11 +73,7 @@ def get_public_url(storage_path):
     """Get public URL for uploaded file"""
     return supabase.storage.from_('resumes').get_public_url(storage_path)
 
-@app.route('/')
-def index():
-    return render_template('index.html')
-
-@app.route('/upload', methods=['POST'])
+@app.route('/api/upload', methods=['POST'])
 def upload_resume():
     try:
         # Get form data
@@ -83,19 +82,16 @@ def upload_resume():
         
         # Validate required fields
         if not name or not mobile_number:
-            flash('Name and mobile number are required!', 'error')
-            return redirect(url_for('index'))
+            return jsonify({'error': 'Name and mobile number are required!'}), 400
         
         # Check if file was uploaded
         if 'resume' not in request.files:
-            flash('No resume file uploaded!', 'error')
-            return redirect(url_for('index'))
+            return jsonify({'error': 'No resume file uploaded!'}), 400
         
         file = request.files['resume']
         
         if file.filename == '':
-            flash('No file selected!', 'error')
-            return redirect(url_for('index'))
+            return jsonify({'error': 'No file selected!'}), 400
         
         if file and allowed_file(file.filename):
             # Generate unique filename
@@ -121,38 +117,51 @@ def upload_resume():
                         'resume_filename': file.filename,
                         'resume_path': storage_path,
                         'resume_url': public_url,
-                        'created_at': datetime.now().isoformat()
+                        'created_at': datetime.utcnow().isoformat() + 'Z'
                     }
                     
                     db_response = save_to_database(user_data)
                     
                     if db_response.data:
-                        flash('Resume uploaded successfully!', 'success')
+                        return jsonify({
+                            'success': True,
+                            'message': 'Resume uploaded successfully!',
+                            'data': {
+                                'name': name,
+                                'mobile_number': mobile_number,
+                                'resume_filename': file.filename,
+                                'resume_url': public_url
+                            }
+                        })
                     else:
-                        flash('Error saving to database!', 'error')
+                        return jsonify({'error': 'Error saving to database!'}), 500
                 else:
-                    flash('Error uploading file to storage!', 'error')
+                    return jsonify({'error': 'Error uploading file to storage!'}), 500
                 
             except Exception as e:
-                flash(f'Error processing upload: {str(e)}', 'error')
+                return jsonify({'error': f'Error processing upload: {str(e)}'}), 500
         
         else:
-            flash('Invalid file type! Please upload PDF, DOC, or DOCX files only.', 'error')
+            return jsonify({'error': 'Invalid file type! Please upload PDF, DOC, or DOCX files only.'}), 400
     
     except Exception as e:
-        flash(f'An error occurred: {str(e)}', 'error')
-    
-    return redirect(url_for('index'))
+        return jsonify({'error': f'An error occurred: {str(e)}'}), 500
 
-@app.route('/submissions')
-def view_submissions():
+@app.route('/api/submissions', methods=['GET'])
+def get_submissions():
     try:
         response = supabase.table('user_resumes').select('*').order('created_at', desc=True).execute()
         submissions = response.data if response.data else []
-        return render_template('submissions.html', submissions=submissions)
+        return jsonify({
+            'success': True,
+            'data': submissions
+        })
     except Exception as e:
-        flash(f'Error fetching submissions: {str(e)}', 'error')
-        return render_template('submissions.html', submissions=[])
+        return jsonify({'error': f'Error fetching submissions: {str(e)}'}), 500
+
+@app.route('/api/health', methods=['GET'])
+def health_check():
+    return jsonify({'status': 'healthy', 'message': 'API is running'})
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(debug=True, port=5000)
