@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+
+{% block title %}Upload Resume - Resume Upload System{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-md-8">
+        <div class="card">
+            <div class="card-header">
+                <h3 class="card-title mb-0">Upload Your Resume</h3>
+            </div>
+            <div class="card-body">
+                <form action="{{ url_for('upload_resume') }}" method="post" enctype="multipart/form-data" id="uploadForm">
+                    <div class="mb-3">
+                        <label for="name" class="form-label">Full Name *</label>
+                        <input type="text" class="form-control" id="name" name="name" required>
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="mobile_number" class="form-label">Mobile Number *</label>
+                        <input type="tel" class="form-control" id="mobile_number" name="mobile_number" 
+                               pattern="[0-9]{10}" title="Please enter a 10-digit mobile number" required>
+                        <div class="form-text">Enter 10-digit mobile number</div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="resume" class="form-label">Resume *</label>
+                        <div class="upload-area">
+                            <input type="file" class="form-control" id="resume" name="resume" 
+                                   accept=".pdf,.doc,.docx" required>
+                            <div class="mt-2 file-info">
+                                <small>Supported formats: PDF, DOC, DOCX (Max size: 5MB)</small>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="d-grid">
+                        <button type="submit" class="btn btn-primary btn-lg" id="submitBtn">
+                            <span class="spinner-border spinner-border-sm d-none" id="spinner"></span>
+                            Upload Resume
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.getElementById('uploadForm').addEventListener('submit', function() {
+    const submitBtn = document.getElementById('submitBtn');
+    const spinner = document.getElementById('spinner');
+    
+    submitBtn.disabled = true;
+    spinner.classList.remove('d-none');
+    submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> Uploading...';
+});
+
+// File size validation
+document.getElementById('resume').addEventListener('change', function() {
+    const file = this.files[0];
+    const maxSize = 5 * 1024 * 1024; // 5MB
+    
+    if (file && file.size > maxSize) {
+        alert('File size must be less than 5MB');
+        this.value = '';
+    }
+});
+</script>
+{% endblock %}
